@@ -7,9 +7,20 @@ package org.test;
 public interface EventGate {
 
     /**
-     * Register the event and get allowance to process the event
-     * @return Returns <em>true</em> of further processing is allowed
+     * <p>Reset the gate to open state</p>
      */
-    boolean passed();
+    void reset();
+
+    /**
+     * <p>Check the gate is open</p>
+     *
+     * @return Returns {@code true} if gate is open
+     */
+    boolean open();
+
+    /**
+     * <p>Register an event</p>
+     */
+    void register();
 
 }

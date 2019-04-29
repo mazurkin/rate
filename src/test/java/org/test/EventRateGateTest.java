@@ -12,8 +12,8 @@ public class EventRateGateTest {
     private MockChronometer chronometer;
 
     @Before
-    public void setUp() throws Exception {
-        chronometer = MockChronometer.createFrozen("2017-01-01 12:00:00.000 UTC", 0);
+    public void setUp() {
+        chronometer = MockChronometer.createFrozen(0, 0);
     }
 
     @Test
@@ -25,8 +25,8 @@ public class EventRateGateTest {
 
         // sending 1000 events per second for the period of 10 seconds
         for (int i = 0; i < 10000; i++) {
-            balance += gate.passed() ? 1 : 0;
-
+            balance += gate.open() ? 1 : 0;
+            gate.register();
             chronometer.shiftBy(1);
         }
 
@@ -42,8 +42,8 @@ public class EventRateGateTest {
 
         // sending 1000 events per second for the period of 10 seconds
         for (int i = 0; i < 10000; i++) {
-            balance += gate.passed() ? 1 : 0;
-
+            balance += gate.open() ? 1 : 0;
+            gate.register();
             chronometer.shiftBy(1);
         }
 
@@ -59,8 +59,11 @@ public class EventRateGateTest {
 
         // sending 1000 events per second for the period of 10 seconds
         for (int i = 0; i < 10000; i++) {
-            balance += gate.passed() ? 1 : 0;
-
+            boolean shouldPass = gate.open();
+            balance += shouldPass ? 1 : 0;
+            if (shouldPass) {
+                gate.register();
+            }
             chronometer.shiftBy(1);
         }
 
@@ -71,18 +74,20 @@ public class EventRateGateTest {
     public void testOverFlow2() throws Exception {
         EventGate gate = new EventRateGate(1, 1, TimeUnit.SECONDS, -1, chronometer);
 
-        Assert.assertTrue(gate.passed());
+        Assert.assertTrue(gate.open());
+        gate.register();
         chronometer.shiftBy(999);
-        Assert.assertFalse(gate.passed());
+        Assert.assertFalse(gate.open());
     }
 
     @Test
     public void testOverFlow3() throws Exception {
         EventGate gate = new EventRateGate(1, 1, TimeUnit.SECONDS, -1, chronometer);
 
-        Assert.assertTrue(gate.passed());
+        Assert.assertTrue(gate.open());
+        gate.register();
         chronometer.shiftBy(1001);
-        Assert.assertTrue(gate.passed());
+        Assert.assertTrue(gate.open());
     }
 
     @Test
@@ -96,13 +101,92 @@ public class EventRateGateTest {
 
         for (int i = 0; i < 10000; i++) {
             for (int j = 0, limit = 1 + random.nextInt(10); j < limit; j++) {
-                balance += gate.passed() ? 1 : 0;
+                boolean shouldPass = gate.open();
+                balance += shouldPass ? 1 : 0;
+                if (shouldPass) {
+                    gate.register();
+                }
             }
 
             chronometer.shiftBy(1);
         }
 
         Assert.assertEquals(8000, balance);
+    }
+
+    @Test
+    public void testOverFlow5() throws Exception {
+        // 800 events per 1 second results to 16 events per 20 milliseconds
+        EventGate gate = new EventRateGate(800, 1, TimeUnit.SECONDS, -1, chronometer);
+
+        int balance = 0;
+
+        // sending 800 events in the first nanosecond (crazy but let's assume that)
+        for (int i = 0; i < 800; i++) {
+            balance += gate.open() ? 1 : 0;
+            gate.register();
+        }
+
+        // after that spike only 16 events are registered (effectiveRate=16)
+        // 0 ms gone
+        Assert.assertEquals(16, balance);
+
+        // Shall be closed after 999 ms (the whole second is already spent)
+        chronometer.shiftBy(999);
+        Assert.assertFalse(gate.open());
+
+        // Shall be opened after 1000 ms
+        chronometer.shiftBy(1);
+        Assert.assertTrue(gate.open());
+    }
+
+    @Test
+    public void testOverFlow6() throws Exception {
+        // 800 events per 1 second results to 16 events per 20 milliseconds
+        EventGate gate = new EventRateGate(800, 1, TimeUnit.SECONDS, -1, chronometer);
+
+        int balance = 0;
+
+        // sending 800 events in the first 8 milliseconds
+        for (int j = 0; j < 8; j++) {
+            for (int i = 0; i < 100; i++) {
+                balance += gate.open() ? 1 : 0;
+                gate.register();
+            }
+
+            chronometer.shiftBy(1);
+        }
+
+        // after that spike only 16 events are registered (effectiveRate=16)
+        // 8 ms gone
+        Assert.assertEquals(16, balance);
+
+        // Shall be closed after 991 ms (the whole second is already spent)
+        chronometer.shiftBy(991);
+        Assert.assertFalse(gate.open());
+
+        // Shall be opened after 1000 ms
+        chronometer.shiftBy(1);
+        Assert.assertTrue(gate.open());
+    }
+
+    @Test
+    public void testNormalSteps() {
+        // 800 events per 1 second results to 16 events per 20 milliseconds
+        EventGate gate = new EventRateGate(800, 1, TimeUnit.SECONDS, -1, chronometer);
+
+        for (int j = 0; j < 10; j++) {
+            for (int i = 0; i < 800; i++) {
+                gate.register();
+            }
+            Assert.assertFalse(gate.open());
+
+            chronometer.shiftBy(100);
+            Assert.assertFalse(gate.open());
+
+            chronometer.shiftBy(900);
+            Assert.assertTrue(gate.open());
+        }
     }
 
 }

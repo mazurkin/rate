@@ -64,12 +64,20 @@ public class EventRateGate implements EventGate {
         this.deadlineNs = chronometer.getTickNs();
         this.count = 0;
 
-        this.setTarget(rate, time, timeUnit, granularity);
+        this.init(rate, time, timeUnit, granularity);
     }
 
-    public void setTarget(long rate, long time, TimeUnit timeUnit, int granularity) {
+    /**
+     * Change the parameters of the gate
+     *
+     * @param rate The number of allowed events per period
+     * @param time Time period
+     * @param timeUnit Time unit of specified period
+     * @param granularity Divider for the period. Specify -1 to auto-choose the divider.
+     */
+    public void init(long rate, long time, TimeUnit timeUnit, int granularity) {
         final int effectiveGranularity = granularity > 0 ?
-                granularity : calculateGranularity(rate, time, timeUnit);
+                granularity : calculateAutoGranularity(rate, time, timeUnit);
 
         // Try to lower granularity of measure period
         final long effectiveRate = rate / effectiveGranularity;
@@ -91,46 +99,50 @@ public class EventRateGate implements EventGate {
     }
 
     @Override
-    public boolean passed() {
-        if (targetEventRate <= 0 || targetPeriodNs <= 0) {
-            return false;
-        }
+    public boolean open() {
+        return chronometer.getTickNs() >= deadlineNs;
+    }
 
+    @Override
+    public void register() {
         final long nowNs = chronometer.getTickNs();
+        final long elapsedNs = nowNs - deadlineNs;
 
-        if (nowNs >= deadlineNs) {
-            final long elapsedNs = chronometer.getElapsedNs(deadlineNs);
+        count++;
 
-            count++;
+        if (count >= targetEventRate || elapsedNs >= targetPeriodNs) {
+            final double eventsRegistered = count;
+            final double eventsAllowed = 1.0 * targetEventRate * elapsedNs / targetPeriodNs;
 
-            long delayNs = 0;
-
-            if (elapsedNs >= targetPeriodNs || count >= targetEventRate) {
-                final double eventsRegistered = count;
-                final double eventsAllowed = 1.0 * targetEventRate * elapsedNs / targetPeriodNs;
-
-                if (eventsRegistered > eventsAllowed) {
-                    final double eventsExcess = eventsRegistered - eventsAllowed;
-                    delayNs = Math.round(targetPeriodNs * eventsExcess / targetEventRate);
-                }
-
+            if (eventsRegistered > eventsAllowed) {
+                final double eventsExcess = eventsRegistered - eventsAllowed;
+                final long delayNs = Math.round(targetPeriodNs * eventsExcess / targetEventRate);
                 deadlineNs = nowNs + delayNs;
-                count = 0;
+            } else {
+                deadlineNs = nowNs;
             }
 
-            return true;
-        } else {
-            return false;
+            count = 0;
         }
     }
 
-    private static int calculateGranularity(long rate, long time, TimeUnit timeUnit) {
-        final int estimate1 = (int) (rate / MIN_AUTO_GRANULARITY_RATE);
-        final int estimate2 = (int) (timeUnit.toMillis(time) / MIN_AUTO_GRANULARITY_PERIOD_MS);
+    @Override
+    public void reset() {
+        this.deadlineNs = chronometer.getTickNs();
+        this.count = 0;
+    }
 
-        final int estimate = Math.min(estimate1, estimate2);
+    private static int calculateAutoGranularity(long rate, long time, TimeUnit timeUnit) {
+        // safe divider for rate
+        final int dividerByRate = (int) (rate / MIN_AUTO_GRANULARITY_RATE);
 
-        return Math.max(1, estimate);
+        // safe divider for period
+        final int dividerByPeriod = (int) (timeUnit.toMillis(time) / MIN_AUTO_GRANULARITY_PERIOD_MS);
+
+        // choose the minimum of both
+        final int dividerMin = Math.min(dividerByRate, dividerByPeriod);
+
+        return Math.max(1, dividerMin);
     }
 
 }
